@@ -1,1039 +1,283 @@
-"use client";
+import Link from "next/link";
 
-import { useState, useEffect, useCallback, useRef } from "react";
-
-// ── Types ──────────────────────────────────────────────────────────────────
-
-interface UTMLink {
-  id: string;
-  channel: string;
-  utm_source: string;
-  utm_medium: string;
-  utm_campaign: string;
-  utm_term: string;
-  utm_content: string;
-  full_url: string;
-  is_active: boolean;
-  created_at: string;
-}
-
-interface Campaign {
-  id: string;
-  name: string;
-  base_url: string;
-  created_at: string;
-  links: UTMLink[];
-}
-
-// ── Channel Defaults ───────────────────────────────────────────────────────
-
-const CHANNELS: { name: string; utm_source: string; utm_medium: string }[] = [
-  { name: "Facebook", utm_source: "facebook", utm_medium: "social" },
-  { name: "Instagram", utm_source: "instagram", utm_medium: "social" },
-  { name: "X / Twitter", utm_source: "twitter", utm_medium: "social" },
-  { name: "LinkedIn", utm_source: "linkedin", utm_medium: "social" },
-  { name: "Google Ads", utm_source: "google", utm_medium: "cpc" },
-  { name: "Email", utm_source: "email", utm_medium: "email" },
-  { name: "TikTok", utm_source: "tiktok", utm_medium: "social" },
-  { name: "YouTube", utm_source: "youtube", utm_medium: "video" },
-];
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9\s_-]/g, "")
-    .replace(/[\s-]+/g, "_");
-}
-
-function generateId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-function isValidUrl(str: string): boolean {
-  try {
-    const url = new URL(str);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function buildFullUrl(
-  baseUrl: string,
-  params: {
-    utm_source: string;
-    utm_medium: string;
-    utm_campaign: string;
-    utm_term?: string;
-    utm_content?: string;
-  }
-): string {
-  const url = new URL(baseUrl);
-  url.searchParams.set("utm_source", params.utm_source);
-  url.searchParams.set("utm_medium", params.utm_medium);
-  url.searchParams.set("utm_campaign", params.utm_campaign);
-  if (params.utm_term) url.searchParams.set("utm_term", params.utm_term);
-  if (params.utm_content) url.searchParams.set("utm_content", params.utm_content);
-  return url.toString();
-}
-
-// ── Toast Component ────────────────────────────────────────────────────────
-
-function Toast({
-  message,
-  onClose,
-}: {
-  message: string;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const t = setTimeout(onClose, 2500);
-    return () => clearTimeout(t);
-  }, [onClose]);
-
+function CheckIcon() {
   return (
-    <div className="fixed bottom-6 right-6 z-50 animate-[slideUp_0.2s_ease-out] bg-gray-900 text-white px-5 py-3 rounded-lg shadow-lg text-sm font-medium">
-      {message}
-    </div>
+    <svg className="w-5 h-5 text-indigo-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+    </svg>
   );
 }
 
-// ── Main App ───────────────────────────────────────────────────────────────
-
-export default function Home() {
-  // State
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [collapsedCampaigns, setCollapsedCampaigns] = useState<Set<string>>(
-    new Set()
-  );
-
-  // Form state
-  const [baseUrl, setBaseUrl] = useState("");
-  const [campaignName, setCampaignName] = useState("");
-  const [selectedChannels, setSelectedChannels] = useState<Set<string>>(
-    new Set()
-  );
-  const [channelOverrides, setChannelOverrides] = useState<
-    Record<string, { source?: string; medium?: string; term?: string; content?: string }>
-  >({});
-  const [urlTouched, setUrlTouched] = useState(false);
-  const [nameTouched, setNameTouched] = useState(false);
-
-  // Edit state
-  const [editingLink, setEditingLink] = useState<{
-    campaignId: string;
-    linkId: string;
-  } | null>(null);
-  const [editForm, setEditForm] = useState({
-    utm_source: "",
-    utm_medium: "",
-    utm_term: "",
-    utm_content: "",
-  });
-
-  // Ref for advanced options
-  const [showAdvanced, setShowAdvanced] = useState<string | null>(null);
-
-  // ── Load from localStorage ─────────────────────────────────────────────
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("utm_campaigns");
-      if (saved) setCampaigns(JSON.parse(saved));
-    } catch {}
-    setLoaded(true);
-  }, []);
-
-  // ── Save to localStorage ──────────────────────────────────────────────
-  useEffect(() => {
-    if (loaded) {
-      localStorage.setItem("utm_campaigns", JSON.stringify(campaigns));
-    }
-  }, [campaigns, loaded]);
-
-  // ── Toast helper ──────────────────────────────────────────────────────
-  const showToast = useCallback((msg: string) => setToast(msg), []);
-
-  // ── Form validation ───────────────────────────────────────────────────
-  const urlError = urlTouched && baseUrl && !isValidUrl(baseUrl);
-  const nameError = nameTouched && !campaignName.trim();
-  const canGenerate =
-    isValidUrl(baseUrl) &&
-    campaignName.trim() &&
-    selectedChannels.size > 0;
-
-  // ── Channel toggle ────────────────────────────────────────────────────
-  function toggleChannel(name: string) {
-    setSelectedChannels((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) {
-        next.delete(name);
-        // Also close advanced if open
-        if (showAdvanced === name) setShowAdvanced(null);
-      } else {
-        next.add(name);
-      }
-      return next;
-    });
-  }
-
-  // ── Override helpers ──────────────────────────────────────────────────
-  function setOverride(
-    channel: string,
-    field: "source" | "medium" | "term" | "content",
-    value: string
-  ) {
-    setChannelOverrides((prev) => ({
-      ...prev,
-      [channel]: { ...prev[channel], [field]: value },
-    }));
-  }
-
-  // ── Generate links ────────────────────────────────────────────────────
-  function handleGenerate() {
-    if (!canGenerate) return;
-
-    const slug = slugify(campaignName);
-    const newCampaign: Campaign = {
-      id: generateId(),
-      name: campaignName.trim(),
-      base_url: baseUrl.trim(),
-      created_at: new Date().toISOString(),
-      links: [],
-    };
-
-    for (const channelName of selectedChannels) {
-      const defaults = CHANNELS.find((c) => c.name === channelName)!;
-      const overrides = channelOverrides[channelName] || {};
-      const source = overrides.source?.trim() || defaults.utm_source;
-      const medium = overrides.medium?.trim() || defaults.utm_medium;
-      const term = overrides.term?.trim() || "";
-      const content = overrides.content?.trim() || "";
-
-      newCampaign.links.push({
-        id: generateId(),
-        channel: channelName,
-        utm_source: source,
-        utm_medium: medium,
-        utm_campaign: slug,
-        utm_term: term,
-        utm_content: content,
-        full_url: buildFullUrl(baseUrl.trim(), {
-          utm_source: source,
-          utm_medium: medium,
-          utm_campaign: slug,
-          utm_term: term,
-          utm_content: content,
-        }),
-        is_active: true,
-        created_at: new Date().toISOString(),
-      });
-    }
-
-    setCampaigns((prev) => [newCampaign, ...prev]);
-
-    // Reset form
-    setBaseUrl("");
-    setCampaignName("");
-    setSelectedChannels(new Set());
-    setChannelOverrides({});
-    setUrlTouched(false);
-    setNameTouched(false);
-    setShowAdvanced(null);
-
-    showToast(`Campaign "${campaignName.trim()}" created with ${newCampaign.links.length} link(s)`);
-  }
-
-  // ── Link actions ──────────────────────────────────────────────────────
-  function toggleLink(campaignId: string, linkId: string) {
-    setCampaigns((prev) =>
-      prev.map((c) =>
-        c.id === campaignId
-          ? {
-              ...c,
-              links: c.links.map((l) =>
-                l.id === linkId ? { ...l, is_active: !l.is_active } : l
-              ),
-            }
-          : c
-      )
-    );
-  }
-
-  function deleteLink(campaignId: string, linkId: string) {
-    setCampaigns((prev) =>
-      prev
-        .map((c) =>
-          c.id === campaignId
-            ? { ...c, links: c.links.filter((l) => l.id !== linkId) }
-            : c
-        )
-        .filter((c) => c.links.length > 0)
-    );
-    showToast("Link deleted");
-  }
-
-  function deleteCampaign(campaignId: string) {
-    setCampaigns((prev) => prev.filter((c) => c.id !== campaignId));
-    showToast("Campaign deleted");
-  }
-
-  function bulkToggle(campaignId: string, active: boolean) {
-    setCampaigns((prev) =>
-      prev.map((c) =>
-        c.id === campaignId
-          ? { ...c, links: c.links.map((l) => ({ ...l, is_active: active })) }
-          : c
-      )
-    );
-    showToast(active ? "All links activated" : "All links deactivated");
-  }
-
-  function copyToClipboard(text: string) {
-    navigator.clipboard.writeText(text);
-    showToast("Copied to clipboard");
-  }
-
-  function copyAllActive(campaign: Campaign) {
-    const activeLinks = campaign.links
-      .filter((l) => l.is_active)
-      .map((l) => l.full_url)
-      .join("\n");
-    if (!activeLinks) {
-      showToast("No active links to copy");
-      return;
-    }
-    navigator.clipboard.writeText(activeLinks);
-    showToast(
-      `Copied ${campaign.links.filter((l) => l.is_active).length} active link(s)`
-    );
-  }
-
-  function startEdit(campaignId: string, link: UTMLink) {
-    setEditingLink({ campaignId, linkId: link.id });
-    setEditForm({
-      utm_source: link.utm_source,
-      utm_medium: link.utm_medium,
-      utm_term: link.utm_term,
-      utm_content: link.utm_content,
-    });
-  }
-
-  function saveEdit() {
-    if (!editingLink) return;
-    setCampaigns((prev) =>
-      prev.map((c) =>
-        c.id === editingLink.campaignId
-          ? {
-              ...c,
-              links: c.links.map((l) => {
-                if (l.id !== editingLink.linkId) return l;
-                const source = editForm.utm_source.trim() || l.utm_source;
-                const medium = editForm.utm_medium.trim() || l.utm_medium;
-                const term = editForm.utm_term.trim();
-                const content = editForm.utm_content.trim();
-                return {
-                  ...l,
-                  utm_source: source,
-                  utm_medium: medium,
-                  utm_term: term,
-                  utm_content: content,
-                  full_url: buildFullUrl(c.base_url, {
-                    utm_source: source,
-                    utm_medium: medium,
-                    utm_campaign: l.utm_campaign,
-                    utm_term: term,
-                    utm_content: content,
-                  }),
-                };
-              }),
-            }
-          : c
-      )
-    );
-    setEditingLink(null);
-    showToast("Link updated");
-  }
-
-  // ── Collapse toggle ───────────────────────────────────────────────────
-  function toggleCollapse(campaignId: string) {
-    setCollapsedCampaigns((prev) => {
-      const next = new Set(prev);
-      if (next.has(campaignId)) next.delete(campaignId);
-      else next.add(campaignId);
-      return next;
-    });
-  }
-
-  // ── Filtered campaigns ────────────────────────────────────────────────
-  const filteredCampaigns = campaigns
-    .map((c) => {
-      if (!searchQuery.trim()) return c;
-      const q = searchQuery.toLowerCase();
-      if (c.name.toLowerCase().includes(q)) return c;
-      const matchingLinks = c.links.filter(
-        (l) =>
-          l.channel.toLowerCase().includes(q) ||
-          l.utm_source.toLowerCase().includes(q)
-      );
-      if (matchingLinks.length > 0) return { ...c, links: matchingLinks };
-      return null;
-    })
-    .filter(Boolean) as Campaign[];
-
-  // ── Don't render until loaded from localStorage ───────────────────────
-  if (!loaded) return null;
-
-  // ── Render ────────────────────────────────────────────────────────────
+export default function LandingPage() {
   return (
-    <div className="min-h-screen">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-5">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center">
-              <svg
-                className="w-5 h-5 text-white"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
-                />
+    <div className="min-h-screen bg-white">
+      {/* Nav */}
+      <nav className="border-b border-gray-100">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center">
+              <svg className="w-4.5 h-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
               </svg>
             </div>
+            <span className="text-lg font-bold text-gray-900">UTM Link Builder</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <Link href="/login" className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors px-3 py-2">
+              Log in
+            </Link>
+            <Link href="/signup" className="text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 px-4 py-2 rounded-lg transition-colors shadow-sm">
+              Get started free
+            </Link>
+          </div>
+        </div>
+      </nav>
+
+      {/* Hero */}
+      <section className="pt-20 pb-16 sm:pt-28 sm:pb-24">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 text-center">
+          <div className="inline-flex items-center gap-2 bg-indigo-50 text-indigo-700 text-sm font-medium px-3.5 py-1.5 rounded-full mb-6">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            Free to use — no account required
+          </div>
+          <h1 className="text-4xl sm:text-5xl font-extrabold text-gray-900 tracking-tight leading-tight mb-5">
+            Build UTM links in seconds,
+            <br className="hidden sm:block" />
+            <span className="text-indigo-600"> not spreadsheets</span>
+          </h1>
+          <p className="text-lg sm:text-xl text-gray-500 max-w-2xl mx-auto mb-10 leading-relaxed">
+            Generate, organize, and manage UTM-tagged campaign URLs for every channel — all from one simple interface.
+          </p>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <Link href="/dashboard" className="w-full sm:w-auto text-center px-8 py-3.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors shadow-md shadow-indigo-200">
+              Start building links
+            </Link>
+            <a href="#how-it-works" className="w-full sm:w-auto text-center px-8 py-3.5 text-sm font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors">
+              See how it works
+            </a>
+          </div>
+        </div>
+      </section>
+
+      {/* Social proof bar */}
+      <section className="border-y border-gray-100 bg-gray-50/50 py-8">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6">
+          <div className="grid grid-cols-3 gap-8 text-center">
             <div>
-              <h1 className="text-xl font-bold text-gray-900">
-                UTM Link Builder
-              </h1>
-              <p className="text-sm text-gray-500">
-                Generate and manage UTM-tagged campaign URLs
+              <p className="text-2xl sm:text-3xl font-bold text-gray-900">8</p>
+              <p className="text-sm text-gray-500 mt-1">Channels supported</p>
+            </div>
+            <div>
+              <p className="text-2xl sm:text-3xl font-bold text-gray-900">&lt;15s</p>
+              <p className="text-sm text-gray-500 mt-1">To generate a link</p>
+            </div>
+            <div>
+              <p className="text-2xl sm:text-3xl font-bold text-gray-900">100%</p>
+              <p className="text-sm text-gray-500 mt-1">Free to use</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Features */}
+      <section className="py-20 sm:py-28">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6">
+          <div className="text-center mb-14">
+            <h2 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-4">
+              Everything you need for UTM tracking
+            </h2>
+            <p className="text-lg text-gray-500 max-w-2xl mx-auto">
+              Stop juggling spreadsheets. Build, manage, and copy your campaign links from one place.
+            </p>
+          </div>
+
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {/* Feature 1 */}
+            <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">
+              <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center mb-4">
+                <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+              </div>
+              <h3 className="text-base font-semibold text-gray-900 mb-2">Multi-channel generation</h3>
+              <p className="text-sm text-gray-500 leading-relaxed">
+                Select multiple channels at once and generate a unique UTM link for each. Facebook, Instagram, Google Ads, Email, and more.
+              </p>
+            </div>
+
+            {/* Feature 2 */}
+            <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">
+              <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center mb-4">
+                <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+              </div>
+              <h3 className="text-base font-semibold text-gray-900 mb-2">Campaign organization</h3>
+              <p className="text-sm text-gray-500 leading-relaxed">
+                Links are automatically grouped under collapsible campaign headers. Search and filter by campaign name or channel.
+              </p>
+            </div>
+
+            {/* Feature 3 */}
+            <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">
+              <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center mb-4">
+                <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <h3 className="text-base font-semibold text-gray-900 mb-2">One-click copy</h3>
+              <p className="text-sm text-gray-500 leading-relaxed">
+                Copy individual links or all active links for a campaign at once. Ready to paste into your ads, emails, or posts.
+              </p>
+            </div>
+
+            {/* Feature 4 */}
+            <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">
+              <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center mb-4">
+                <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </div>
+              <h3 className="text-base font-semibold text-gray-900 mb-2">Custom overrides</h3>
+              <p className="text-sm text-gray-500 leading-relaxed">
+                Override default utm_source and utm_medium per channel. Add optional utm_term and utm_content values.
+              </p>
+            </div>
+
+            {/* Feature 5 */}
+            <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">
+              <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center mb-4">
+                <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <h3 className="text-base font-semibold text-gray-900 mb-2">Active/inactive toggles</h3>
+              <p className="text-sm text-gray-500 leading-relaxed">
+                Toggle links on or off individually or in bulk. Inactive links are excluded from copy-all actions.
+              </p>
+            </div>
+
+            {/* Feature 6 */}
+            <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">
+              <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center mb-4">
+                <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
+                </svg>
+              </div>
+              <h3 className="text-base font-semibold text-gray-900 mb-2">Persistent storage</h3>
+              <p className="text-sm text-gray-500 leading-relaxed">
+                Your campaigns and links are saved locally in your browser. Come back anytime and pick up where you left off.
               </p>
             </div>
           </div>
         </div>
-      </header>
+      </section>
 
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8 space-y-8">
-        {/* ── Creation Form ─────────────────────────────────────────── */}
-        <section className="bg-white rounded-xl border border-gray-200 shadow-sm">
-          <div className="px-6 py-5 border-b border-gray-100">
-            <h2 className="text-lg font-semibold text-gray-900">
-              Create Campaign Links
+      {/* How It Works */}
+      <section id="how-it-works" className="py-20 sm:py-28 bg-gray-50 border-y border-gray-100">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6">
+          <div className="text-center mb-14">
+            <h2 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-4">
+              Three steps to perfect UTM links
             </h2>
+            <p className="text-lg text-gray-500">
+              From URL to tagged links in under 15 seconds.
+            </p>
           </div>
 
-          <div className="px-6 py-5 space-y-5">
-            {/* Base URL */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Base URL <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="url"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                onBlur={() => setUrlTouched(true)}
-                placeholder="https://example.com/landing"
-                className={`w-full px-3.5 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 ${
-                  urlError
-                    ? "border-red-300 bg-red-50"
-                    : "border-gray-300 bg-white"
-                }`}
-              />
-              {urlError && (
-                <p className="mt-1 text-sm text-red-600">
-                  Please enter a valid URL (e.g., https://example.com)
-                </p>
-              )}
-            </div>
-
-            {/* Campaign Name */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Campaign Name <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={campaignName}
-                onChange={(e) => setCampaignName(e.target.value)}
-                onBlur={() => setNameTouched(true)}
-                placeholder="Spring Sale 2026"
-                className={`w-full px-3.5 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 ${
-                  nameError
-                    ? "border-red-300 bg-red-50"
-                    : "border-gray-300 bg-white"
-                }`}
-              />
-              {nameError && (
-                <p className="mt-1 text-sm text-red-600">
-                  Campaign name is required
-                </p>
-              )}
-              {campaignName.trim() && (
-                <p className="mt-1 text-xs text-gray-400">
-                  utm_campaign={slugify(campaignName)}
-                </p>
-              )}
-            </div>
-
-            {/* Channel Selector */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Channels <span className="text-red-500">*</span>
-              </label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {CHANNELS.map((ch) => {
-                  const selected = selectedChannels.has(ch.name);
-                  return (
-                    <div key={ch.name}>
-                      <button
-                        type="button"
-                        onClick={() => toggleChannel(ch.name)}
-                        className={`w-full px-3 py-2.5 rounded-lg border text-sm font-medium transition-all ${
-                          selected
-                            ? "bg-indigo-50 border-indigo-300 text-indigo-700"
-                            : "bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50"
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <div
-                            className={`w-4 h-4 rounded border flex items-center justify-center ${
-                              selected
-                                ? "bg-indigo-600 border-indigo-600"
-                                : "border-gray-300"
-                            }`}
-                          >
-                            {selected && (
-                              <svg
-                                className="w-3 h-3 text-white"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth={3}
-                                  d="M5 13l4 4L19 7"
-                                />
-                              </svg>
-                            )}
-                          </div>
-                          {ch.name}
-                        </div>
-                      </button>
-
-                      {/* Advanced options per channel */}
-                      {selected && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setShowAdvanced(
-                              showAdvanced === ch.name ? null : ch.name
-                            )
-                          }
-                          className="mt-1 text-xs text-indigo-500 hover:text-indigo-700 pl-1"
-                        >
-                          {showAdvanced === ch.name
-                            ? "Hide options"
-                            : "Customize"}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
+          <div className="grid sm:grid-cols-3 gap-8">
+            <div className="text-center">
+              <div className="w-12 h-12 rounded-full bg-indigo-600 text-white text-lg font-bold flex items-center justify-center mx-auto mb-4">
+                1
               </div>
-
-              {/* Channel Override Panel */}
-              {showAdvanced && selectedChannels.has(showAdvanced) && (
-                <div className="mt-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                  <h4 className="text-sm font-medium text-gray-700 mb-3">
-                    Customize: {showAdvanced}
-                  </h4>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">
-                        utm_source
-                      </label>
-                      <input
-                        type="text"
-                        value={channelOverrides[showAdvanced]?.source ?? ""}
-                        onChange={(e) =>
-                          setOverride(showAdvanced!, "source", e.target.value)
-                        }
-                        placeholder={
-                          CHANNELS.find((c) => c.name === showAdvanced)
-                            ?.utm_source
-                        }
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">
-                        utm_medium
-                      </label>
-                      <input
-                        type="text"
-                        value={channelOverrides[showAdvanced]?.medium ?? ""}
-                        onChange={(e) =>
-                          setOverride(showAdvanced!, "medium", e.target.value)
-                        }
-                        placeholder={
-                          CHANNELS.find((c) => c.name === showAdvanced)
-                            ?.utm_medium
-                        }
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">
-                        utm_term
-                      </label>
-                      <input
-                        type="text"
-                        value={channelOverrides[showAdvanced]?.term ?? ""}
-                        onChange={(e) =>
-                          setOverride(showAdvanced!, "term", e.target.value)
-                        }
-                        placeholder="Optional"
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">
-                        utm_content
-                      </label>
-                      <input
-                        type="text"
-                        value={channelOverrides[showAdvanced]?.content ?? ""}
-                        onChange={(e) =>
-                          setOverride(showAdvanced!, "content", e.target.value)
-                        }
-                        placeholder="Optional"
-                        className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-sm"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Generate Button */}
-            <button
-              onClick={handleGenerate}
-              disabled={!canGenerate}
-              className={`w-full py-3 rounded-lg text-sm font-semibold transition-all ${
-                canGenerate
-                  ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm"
-                  : "bg-gray-100 text-gray-400 cursor-not-allowed"
-              }`}
-            >
-              Generate{" "}
-              {selectedChannels.size > 0
-                ? `${selectedChannels.size} Link${selectedChannels.size > 1 ? "s" : ""}`
-                : "Links"}
-            </button>
-          </div>
-        </section>
-
-        {/* ── Campaign URL List ─────────────────────────────────────── */}
-        <section>
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-            <h2 className="text-lg font-semibold text-gray-900">
-              Campaign Links
-            </h2>
-            {campaigns.length > 0 && (
-              <div className="relative">
-                <svg
-                  className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                  />
-                </svg>
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search campaigns or channels..."
-                  className="pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm w-full sm:w-72 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-            )}
-          </div>
-
-          {filteredCampaigns.length === 0 ? (
-            <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-              <div className="w-16 h-16 rounded-full bg-indigo-50 flex items-center justify-center mx-auto mb-4">
-                <svg
-                  className="w-8 h-8 text-indigo-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.5}
-                    d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
-                  />
-                </svg>
-              </div>
-              <h3 className="text-base font-semibold text-gray-900 mb-1">
-                {campaigns.length > 0
-                  ? "No matching campaigns"
-                  : "No campaigns yet"}
-              </h3>
-              <p className="text-sm text-gray-500">
-                {campaigns.length > 0
-                  ? "Try adjusting your search terms"
-                  : "Create your first campaign above to get started"}
+              <h3 className="text-base font-semibold text-gray-900 mb-2">Enter your URL</h3>
+              <p className="text-sm text-gray-500 leading-relaxed">
+                Paste the destination URL and give your campaign a name. The slug is generated automatically.
               </p>
             </div>
-          ) : (
-            <div className="space-y-4">
-              {filteredCampaigns.map((campaign) => {
-                const isCollapsed = collapsedCampaigns.has(campaign.id);
-                const activeCount = campaign.links.filter(
-                  (l) => l.is_active
-                ).length;
-
-                return (
-                  <div
-                    key={campaign.id}
-                    className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
-                  >
-                    {/* Campaign Header */}
-                    <div className="px-5 py-4 flex items-center justify-between border-b border-gray-100">
-                      <button
-                        onClick={() => toggleCollapse(campaign.id)}
-                        className="flex items-center gap-3 text-left flex-1 min-w-0"
-                      >
-                        <svg
-                          className={`w-4 h-4 text-gray-400 transition-transform flex-shrink-0 ${
-                            isCollapsed ? "" : "rotate-90"
-                          }`}
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M9 5l7 7-7 7"
-                          />
-                        </svg>
-                        <div className="min-w-0">
-                          <h3 className="font-semibold text-gray-900 truncate">
-                            {campaign.name}
-                          </h3>
-                          <p className="text-xs text-gray-400 truncate">
-                            {campaign.base_url}
-                          </p>
-                        </div>
-                      </button>
-
-                      <div className="flex items-center gap-2 flex-shrink-0 ml-3">
-                        <span className="text-xs text-gray-400">
-                          {activeCount}/{campaign.links.length} active
-                        </span>
-                        <button
-                          onClick={() => bulkToggle(campaign.id, true)}
-                          className="px-2.5 py-1 text-xs font-medium text-green-700 bg-green-50 rounded-md hover:bg-green-100 transition-colors"
-                        >
-                          All On
-                        </button>
-                        <button
-                          onClick={() => bulkToggle(campaign.id, false)}
-                          className="px-2.5 py-1 text-xs font-medium text-gray-600 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
-                        >
-                          All Off
-                        </button>
-                        <button
-                          onClick={() => copyAllActive(campaign)}
-                          className="px-2.5 py-1 text-xs font-medium text-indigo-700 bg-indigo-50 rounded-md hover:bg-indigo-100 transition-colors"
-                        >
-                          Copy Active
-                        </button>
-                        <button
-                          onClick={() => deleteCampaign(campaign.id)}
-                          className="p-1 text-gray-400 hover:text-red-500 transition-colors"
-                          title="Delete campaign"
-                        >
-                          <svg
-                            className="w-4 h-4"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Links */}
-                    {!isCollapsed && (
-                      <div className="divide-y divide-gray-50">
-                        {campaign.links.map((link) => {
-                          const isEditing =
-                            editingLink?.campaignId === campaign.id &&
-                            editingLink?.linkId === link.id;
-
-                          return (
-                            <div
-                              key={link.id}
-                              className={`px-5 py-3 flex items-start gap-3 transition-opacity ${
-                                link.is_active ? "" : "opacity-50"
-                              }`}
-                            >
-                              {/* Toggle */}
-                              <button
-                                onClick={() =>
-                                  toggleLink(campaign.id, link.id)
-                                }
-                                className={`mt-0.5 relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${
-                                  link.is_active
-                                    ? "bg-indigo-600"
-                                    : "bg-gray-300"
-                                }`}
-                              >
-                                <span
-                                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
-                                    link.is_active
-                                      ? "translate-x-4"
-                                      : "translate-x-0"
-                                  }`}
-                                />
-                              </button>
-
-                              {/* Content */}
-                              <div className="flex-1 min-w-0">
-                                {isEditing ? (
-                                  // Edit form
-                                  <div className="space-y-2">
-                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                                      <div>
-                                        <label className="block text-xs text-gray-500 mb-0.5">
-                                          Source
-                                        </label>
-                                        <input
-                                          value={editForm.utm_source}
-                                          onChange={(e) =>
-                                            setEditForm((f) => ({
-                                              ...f,
-                                              utm_source: e.target.value,
-                                            }))
-                                          }
-                                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded"
-                                        />
-                                      </div>
-                                      <div>
-                                        <label className="block text-xs text-gray-500 mb-0.5">
-                                          Medium
-                                        </label>
-                                        <input
-                                          value={editForm.utm_medium}
-                                          onChange={(e) =>
-                                            setEditForm((f) => ({
-                                              ...f,
-                                              utm_medium: e.target.value,
-                                            }))
-                                          }
-                                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded"
-                                        />
-                                      </div>
-                                      <div>
-                                        <label className="block text-xs text-gray-500 mb-0.5">
-                                          Term
-                                        </label>
-                                        <input
-                                          value={editForm.utm_term}
-                                          onChange={(e) =>
-                                            setEditForm((f) => ({
-                                              ...f,
-                                              utm_term: e.target.value,
-                                            }))
-                                          }
-                                          placeholder="Optional"
-                                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded"
-                                        />
-                                      </div>
-                                      <div>
-                                        <label className="block text-xs text-gray-500 mb-0.5">
-                                          Content
-                                        </label>
-                                        <input
-                                          value={editForm.utm_content}
-                                          onChange={(e) =>
-                                            setEditForm((f) => ({
-                                              ...f,
-                                              utm_content: e.target.value,
-                                            }))
-                                          }
-                                          placeholder="Optional"
-                                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded"
-                                        />
-                                      </div>
-                                    </div>
-                                    <div className="flex gap-2">
-                                      <button
-                                        onClick={saveEdit}
-                                        className="px-3 py-1 text-xs font-medium bg-indigo-600 text-white rounded hover:bg-indigo-700"
-                                      >
-                                        Save
-                                      </button>
-                                      <button
-                                        onClick={() => setEditingLink(null)}
-                                        className="px-3 py-1 text-xs font-medium bg-gray-100 text-gray-600 rounded hover:bg-gray-200"
-                                      >
-                                        Cancel
-                                      </button>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  // Display
-                                  <>
-                                    <div className="flex items-center gap-2 mb-0.5">
-                                      <span className="text-xs font-medium text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
-                                        {link.channel}
-                                      </span>
-                                      <span className="text-xs text-gray-400">
-                                        {link.utm_source} / {link.utm_medium}
-                                      </span>
-                                    </div>
-                                    <p
-                                      className={`text-sm text-gray-700 break-all font-mono ${
-                                        link.is_active
-                                          ? ""
-                                          : "line-through"
-                                      }`}
-                                    >
-                                      {link.full_url}
-                                    </p>
-                                  </>
-                                )}
-                              </div>
-
-                              {/* Actions */}
-                              {!isEditing && (
-                                <div className="flex items-center gap-1 flex-shrink-0">
-                                  <button
-                                    onClick={() =>
-                                      copyToClipboard(link.full_url)
-                                    }
-                                    className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors"
-                                    title="Copy link"
-                                  >
-                                    <svg
-                                      className="w-4 h-4"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      viewBox="0 0 24 24"
-                                    >
-                                      <path
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth={2}
-                                        d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                                      />
-                                    </svg>
-                                  </button>
-                                  <button
-                                    onClick={() =>
-                                      startEdit(campaign.id, link)
-                                    }
-                                    className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
-                                    title="Edit link"
-                                  >
-                                    <svg
-                                      className="w-4 h-4"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      viewBox="0 0 24 24"
-                                    >
-                                      <path
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth={2}
-                                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                                      />
-                                    </svg>
-                                  </button>
-                                  <button
-                                    onClick={() =>
-                                      deleteLink(campaign.id, link.id)
-                                    }
-                                    className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                                    title="Delete link"
-                                  >
-                                    <svg
-                                      className="w-4 h-4"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      viewBox="0 0 24 24"
-                                    >
-                                      <path
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth={2}
-                                        d="M6 18L18 6M6 6l12 12"
-                                      />
-                                    </svg>
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+            <div className="text-center">
+              <div className="w-12 h-12 rounded-full bg-indigo-600 text-white text-lg font-bold flex items-center justify-center mx-auto mb-4">
+                2
+              </div>
+              <h3 className="text-base font-semibold text-gray-900 mb-2">Pick your channels</h3>
+              <p className="text-sm text-gray-500 leading-relaxed">
+                Select from 8 preset channels. Each one auto-fills utm_source and utm_medium with sensible defaults.
+              </p>
             </div>
-          )}
-        </section>
-      </main>
+            <div className="text-center">
+              <div className="w-12 h-12 rounded-full bg-indigo-600 text-white text-lg font-bold flex items-center justify-center mx-auto mb-4">
+                3
+              </div>
+              <h3 className="text-base font-semibold text-gray-900 mb-2">Generate &amp; copy</h3>
+              <p className="text-sm text-gray-500 leading-relaxed">
+                Hit generate and your tagged links are ready. Copy them one by one or all at once.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
 
-      {/* Toast */}
-      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+      {/* Channels */}
+      <section className="py-20 sm:py-28">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 text-center">
+          <h2 className="text-3xl sm:text-4xl font-bold text-gray-900 mb-4">
+            Supports your favorite channels
+          </h2>
+          <p className="text-lg text-gray-500 mb-10">
+            Pre-configured with the right utm_source and utm_medium for each platform.
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { name: "Facebook", tag: "social" },
+              { name: "Instagram", tag: "social" },
+              { name: "X / Twitter", tag: "social" },
+              { name: "LinkedIn", tag: "social" },
+              { name: "Google Ads", tag: "cpc" },
+              { name: "Email", tag: "email" },
+              { name: "TikTok", tag: "social" },
+              { name: "YouTube", tag: "video" },
+            ].map((ch) => (
+              <div key={ch.name} className="bg-gray-50 border border-gray-100 rounded-xl py-4 px-3">
+                <p className="text-sm font-semibold text-gray-900">{ch.name}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{ch.tag}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
 
-      {/* Slide-up animation */}
-      <style jsx global>{`
-        @keyframes slideUp {
-          from {
-            opacity: 0;
-            transform: translateY(8px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-      `}</style>
+      {/* CTA */}
+      <section className="py-20 sm:py-28 bg-indigo-600">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 text-center">
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
+            Ready to ditch the spreadsheet?
+          </h2>
+          <p className="text-lg text-indigo-100 mb-8 max-w-xl mx-auto">
+            Start generating clean, organized UTM links for your campaigns in seconds.
+          </p>
+          <Link href="/dashboard" className="inline-block px-8 py-3.5 text-sm font-semibold text-indigo-600 bg-white hover:bg-indigo-50 rounded-xl transition-colors shadow-md">
+            Start building links — it&apos;s free
+          </Link>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="border-t border-gray-100 py-10">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-md bg-indigo-600 flex items-center justify-center">
+              <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+              </svg>
+            </div>
+            <span className="text-sm font-semibold text-gray-900">UTM Link Builder</span>
+          </div>
+          <p className="text-sm text-gray-400">&copy; {new Date().getFullYear()} UTM Link Builder. Free and open source.</p>
+        </div>
+      </footer>
     </div>
   );
 }

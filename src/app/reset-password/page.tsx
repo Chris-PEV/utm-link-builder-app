@@ -16,15 +16,34 @@ export default function ResetPasswordPage() {
     return true;
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  const [apiError, setApiError] = useState("");
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!validate()) return;
     setIsLoading(true);
-    // TODO: Wire up auth provider
-    setTimeout(() => {
-      setIsLoading(false);
+    setApiError("");
+
+    try {
+      const res = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setApiError(data.error || "Something went wrong");
+        return;
+      }
+
       setSent(true);
-    }, 1500);
+    } catch {
+      setApiError("Something went wrong. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   return (
@@ -81,6 +100,11 @@ export default function ResetPasswordPage() {
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
+                  {apiError && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                      {apiError}
+                    </div>
+                  )}
                   <div>
                     <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1.5">
                       Email

@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 export default function SignupPage() {
+  const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -25,12 +27,34 @@ export default function SignupPage() {
     return Object.keys(next).length === 0;
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  const [apiError, setApiError] = useState("");
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!validate()) return;
     setIsLoading(true);
-    // TODO: Wire up auth provider
-    setTimeout(() => setIsLoading(false), 1500);
+    setApiError("");
+
+    try {
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, password }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setApiError(data.error || "Something went wrong");
+        return;
+      }
+
+      router.push("/dashboard");
+    } catch {
+      setApiError("Something went wrong. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   function clearError(field: string) {
@@ -59,6 +83,11 @@ export default function SignupPage() {
             <p className="text-sm text-gray-500 text-center mb-6">Get started with UTM Link Builder</p>
 
             <form onSubmit={handleSubmit} className="space-y-4">
+              {apiError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  {apiError}
+                </div>
+              )}
               {/* Name */}
               <div>
                 <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1.5">
