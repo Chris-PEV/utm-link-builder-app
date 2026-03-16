@@ -8,15 +8,25 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { brand, full_url, campaign_slug, channel } = body;
 
-    if (!full_url || !campaign_slug || !channel) {
+    if (!full_url) {
       return NextResponse.json(
-        { error: "Missing required fields: full_url, campaign_slug, channel" },
+        { error: "Missing required field: full_url" },
         { status: 400 }
       );
     }
 
-    // Generate short code
-    let code = generateShortCode(brand || "", campaign_slug, channel);
+    // Generate short code — use brand + nanoid for standalone, or full code for campaign links
+    let code: string;
+    if (campaign_slug && channel) {
+      code = generateShortCode(brand || "", campaign_slug, channel);
+    } else if (brand) {
+      // Standalone shortener with brand: brand-randomId
+      const brandSlug = brand.toLowerCase().trim().replace(/[^a-z0-9]/g, "").slice(0, 10);
+      code = `${brandSlug}-${nanoid(5)}`;
+    } else {
+      // No brand, just random
+      code = nanoid(7);
+    }
 
     // Check for collision, append suffix if needed
     let attempts = 0;
@@ -27,7 +37,6 @@ export async function POST(request: NextRequest) {
     }
 
     if (await codeExists(finalCode)) {
-      // Extremely unlikely — fallback to pure random
       finalCode = nanoid(8);
     }
 
@@ -35,8 +44,8 @@ export async function POST(request: NextRequest) {
     await storeShortLink(finalCode, {
       full_url,
       brand: brand || "",
-      campaign_slug,
-      channel,
+      campaign_slug: campaign_slug || "",
+      channel: channel || "",
       created_at: new Date().toISOString(),
     });
 
