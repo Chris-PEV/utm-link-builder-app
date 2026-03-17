@@ -140,14 +140,6 @@ export default function Home() {
     utm_content: "",
   });
 
-  // Link Shortener state
-  const [shortenUrl, setShortenUrl] = useState("");
-  const [shortenBrand, setShortenBrand] = useState("");
-  const [isShorteningLoading, setIsShorteningLoading] = useState(false);
-  const [shortenedLinks, setShortenedLinks] = useState<
-    { id: string; original_url: string; short_url: string; short_code: string; brand: string; created_at: string }[]
-  >([]);
-
   // Ref for advanced options
   const [showAdvanced, setShowAdvanced] = useState<string | null>(null);
 
@@ -156,10 +148,6 @@ export default function Home() {
     try {
       const saved = localStorage.getItem("utm_campaigns");
       if (saved) setCampaigns(JSON.parse(saved));
-      const savedBrand = localStorage.getItem("utm_brand");
-      if (savedBrand) setShortenBrand(savedBrand);
-      const savedShortened = localStorage.getItem("utm_shortened_links");
-      if (savedShortened) setShortenedLinks(JSON.parse(savedShortened));
     } catch {}
     setLoaded(true);
   }, []);
@@ -170,12 +158,6 @@ export default function Home() {
       localStorage.setItem("utm_campaigns", JSON.stringify(campaigns));
     }
   }, [campaigns, loaded]);
-
-  useEffect(() => {
-    if (loaded) {
-      localStorage.setItem("utm_shortened_links", JSON.stringify(shortenedLinks));
-    }
-  }, [shortenedLinks, loaded]);
 
   // ── Toast helper ──────────────────────────────────────────────────────
   const showToast = useCallback((msg: string) => setToast(msg), []);
@@ -379,55 +361,6 @@ export default function Home() {
     );
     setEditingLink(null);
     showToast("Link updated");
-  }
-
-  // ── Shorten link (standalone) ─────────────────────────────────────────
-  async function handleShortenLink() {
-    const url = shortenUrl.trim();
-    const brand = shortenBrand.trim();
-
-    if (!url || !isValidUrl(url)) return;
-
-    // Save brand for future use
-    if (brand) {
-      localStorage.setItem("utm_brand", brand);
-    }
-
-    setIsShorteningLoading(true);
-    try {
-      const res = await fetch("/api/shorten", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brand, full_url: url }),
-      });
-
-      if (!res.ok) throw new Error("API error");
-
-      const data = await res.json();
-
-      setShortenedLinks((prev) => [
-        {
-          id: data.short_code,
-          original_url: url,
-          short_url: data.short_url,
-          short_code: data.short_code,
-          brand,
-          created_at: new Date().toISOString(),
-        },
-        ...prev,
-      ]);
-      setShortenUrl("");
-      showToast("Short link created!");
-    } catch {
-      showToast("Failed to create short link — try again");
-    } finally {
-      setIsShorteningLoading(false);
-    }
-  }
-
-  function deleteShortenedLink(id: string) {
-    setShortenedLinks((prev) => prev.filter((l) => l.id !== id));
-    showToast("Shortened link removed");
   }
 
   // ── Collapse toggle ───────────────────────────────────────────────────
@@ -1100,121 +1033,6 @@ export default function Home() {
           )}
         </section>
 
-        {/* ── Link Shortener ──────────────────────────────────────── */}
-        <section className="bg-white rounded-xl border border-gray-200 shadow-sm">
-          <div className="px-6 py-5 border-b border-gray-100">
-            <div className="flex items-center gap-2">
-              <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-              </svg>
-              <h2 className="text-lg font-semibold text-gray-900">Link Shortener</h2>
-            </div>
-            <p className="text-sm text-gray-500 mt-1">Shorten any URL with your brand name</p>
-          </div>
-
-          <div className="px-6 py-5 space-y-4">
-            {/* Brand Name */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Brand Name
-              </label>
-              <input
-                type="text"
-                value={shortenBrand}
-                onChange={(e) => setShortenBrand(e.target.value)}
-                placeholder="e.g., acme"
-                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
-              />
-              <p className="mt-1 text-xs text-gray-400">
-                Used as a prefix in your shortened links
-              </p>
-            </div>
-
-            {/* URL to shorten */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                URL to Shorten <span className="text-red-500">*</span>
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="url"
-                  value={shortenUrl}
-                  onChange={(e) => setShortenUrl(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && isValidUrl(shortenUrl.trim())) handleShortenLink();
-                  }}
-                  placeholder="https://example.com/your-long-url"
-                  className="flex-1 px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
-                />
-                <button
-                  onClick={handleShortenLink}
-                  disabled={!isValidUrl(shortenUrl.trim()) || isShorteningLoading}
-                  className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${
-                    isValidUrl(shortenUrl.trim()) && !isShorteningLoading
-                      ? "bg-green-600 text-white hover:bg-green-700 shadow-sm"
-                      : "bg-gray-100 text-gray-400 cursor-not-allowed"
-                  }`}
-                >
-                  {isShorteningLoading ? "Shortening..." : "Shorten"}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Shortened Links List */}
-          {shortenedLinks.length > 0 && (
-            <div className="border-t border-gray-100">
-              <div className="px-6 py-3 bg-gray-50">
-                <h3 className="text-sm font-medium text-gray-700">
-                  Your Shortened Links ({shortenedLinks.length})
-                </h3>
-              </div>
-              <div className="divide-y divide-gray-50">
-                {shortenedLinks.map((sl) => (
-                  <div key={sl.id} className="px-6 py-3.5 flex items-start justify-between gap-4 hover:bg-gray-50 transition-colors">
-                    <div className="min-w-0 flex-1">
-                      {/* Short URL - prominent */}
-                      <div className="flex items-center gap-2 mb-1">
-                        <p className="text-sm font-mono font-semibold text-green-700 break-all">
-                          {sl.short_url}
-                        </p>
-                        {sl.brand && (
-                          <span className="text-xs font-medium text-green-600 bg-green-50 px-1.5 py-0.5 rounded flex-shrink-0">
-                            {sl.brand}
-                          </span>
-                        )}
-                      </div>
-                      {/* Original URL - muted */}
-                      <p className="text-xs text-gray-400 font-mono break-all truncate">
-                        {sl.original_url}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      <button
-                        onClick={() => copyToClipboard(sl.short_url)}
-                        className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
-                        title="Copy short link"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={() => deleteShortenedLink(sl.id)}
-                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                        title="Remove"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </section>
       </main>
 
       {/* Toast */}
